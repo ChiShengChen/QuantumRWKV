@@ -1,0 +1,411 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from quantum_rwkv import ModelConfig, QuantumRWKVModel
+import numpy as np
+import os
+import csv
+import traceback
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import matplotlib.pyplot as plt
+
+def run_simple_learning_test():
+    # 1. Define Hyper-small Model Configuration
+    vocab_size = 3
+    seq_len_train = 9 # e.g., 0,1,2,0,1,2,0,1,2
+    n_embd_test = 8   # Keep it small, divisible by n_head
+    n_head_test = 2
+    n_layer_test = 1
+    n_qubits_test = 2 # Min qubits, ensure classical_input_projection matches
+    q_depth_test = 1
+    block_size_test = seq_len_train + 5 # Should be >= any sequence length used
+
+    config = ModelConfig(
+        n_embd=n_embd_test,
+        n_head=n_head_test,
+        n_layer=n_layer_test,
+        vocab_size=vocab_size,
+        block_size=block_size_test, 
+        n_intermediate=n_embd_test * 2, # Classical FFN size, less direct impact here
+        layer_norm_epsilon=1e-5,
+        n_qubits=n_qubits_test,
+        q_depth=q_depth_test
+    )
+    print(f"Quantum Model Config for Learning Test: {config}\n")
+
+    # Instantiate model
+    try:
+        model = QuantumRWKVModel(config)
+    except Exception as e:
+        print(f"Error instantiating QuantumRWKVModel: {e}")
+        print("Ensure PennyLane is installed. Try: pip install pennylane")
+        raise
+    print("QuantumRWKVModel instantiated successfully for learning test.\n")
+
+    # 2. Prepare Training Data (Simple repeating sequence: 0, 1, 2, 0, 1, 2, ...)
+    # Input:  0, 1, 2, 0, 1, 2, 0, 1
+    # Target: 1, 2, 0, 1, 2, 0, 1, 2 
+    data_sequence = torch.tensor([0, 1, 2] * (seq_len_train // 3 + 1), dtype=torch.long)
+    input_sequence = data_sequence[:-1].unsqueeze(0) # (B=1, T_train-1)
+    target_sequence = data_sequence[1:].unsqueeze(0)  # (B=1, T_train-1)
+    current_train_len = input_sequence.shape[1]
+
+    print(f"Input sequence shape: {input_sequence.shape}, Data: {input_sequence}")
+    print(f"Target sequence shape: {target_sequence.shape}, Data: {target_sequence}\n")
+
+    # 3. Training Loop
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+    num_epochs = 200 # Increase if needed for convergence on this simple task
+    print_every = 20
+
+    model.train() # Set model to training mode
+    print("Starting training...")
+    for epoch in range(num_epochs):
+        optimizer.zero_grad()
+        
+        # For RWKV, states are managed internally or passed. 
+        # For this simple full sequence training, we can reset states (or pass None for init)
+        # However, the current model.forward expects states or initializes them.
+        # Let's pass None to trigger internal initialization for each batch (epoch here).
+        initial_states = None 
+        
+        logits, updated_states = model(input_sequence, states=initial_states)
+        
+        # Logits: (B, T, VocabSize), Target: (B, T)
+        # Reshape for CrossEntropyLoss: Logits (B*T, VocabSize), Target (B*T)
+        loss = criterion(logits.reshape(-1, vocab_size), target_sequence.reshape(-1))
+        
+        loss.backward()
+        optimizer.step()
+        
+        if (epoch + 1) % print_every == 0:
+            print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
+
+    print("Training finished.\n")
+
+    # 4. Prediction/Generation after Training
+    model.eval() # Set model to evaluation mode
+    print("Starting generation...")
+    
+    seed_token = torch.tensor([[0]], dtype=torch.long) # Start with token 0, Batch size 1
+    generated_sequence = [seed_token.item()]
+    num_tokens_to_generate = seq_len_train * 2 # Generate a bit longer sequence
+    
+    current_input = seed_token
+    # Initialize generation states (similar to training initial states)
+    # For QuantumRWKVModel, states is a list of tuples per layer
+    # Each tuple: ( (aa, bb, pp), prev_x_cm_state )
+    # We need to get the batch size (B=1) and device from the model/seed_token
+    B_gen = current_input.size(0)
+    device_gen = current_input.device
+    dtype_gen = model.wte.weight.dtype # Get dtype from model parameters
+
+    generation_states = []
+    for _ in range(config.n_layer):
+        initial_wkv_aa = torch.zeros(B_gen, config.n_embd, device=device_gen, dtype=dtype_gen)
+        initial_wkv_bb = torch.zeros(B_gen, config.n_embd, device=device_gen, dtype=dtype_gen)
+        initial_wkv_pp = torch.full((B_gen, config.n_embd), -1e38, device=device_gen, dtype=dtype_gen)
+        wkv_state = (initial_wkv_aa, initial_wkv_bb, initial_wkv_pp)
+        cm_state = torch.zeros(B_gen, config.n_embd, device=device_gen, dtype=dtype_gen)
+        generation_states.append((wkv_state, cm_state))
+
+    with torch.no_grad():
+        for _ in range(num_tokens_to_generate -1):
+            logits_gen, generation_states = model(current_input, states=generation_states)
+            # Logits for the last token: logits_gen (B, T=1, VocabSize) -> (B, VocabSize)
+            next_token_logits = logits_gen[:, -1, :]
+            predicted_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+            
+            generated_sequence.append(predicted_token.item())
+            current_input = predicted_token # Next input is the predicted token
+            
+            if len(generated_sequence) >= num_tokens_to_generate:
+                break
+
+    print(f"Original pattern (first {seq_len_train} tokens): {data_sequence[:seq_len_train].tolist()}")
+    print(f"Generated sequence: {generated_sequence}")
+
+    # Check if it learned the pattern (simple check)
+    expected_pattern_part = data_sequence[:len(generated_sequence)].tolist()
+    if generated_sequence == expected_pattern_part:
+        print("Model seems to have learned the simple periodic pattern!")
+    else:
+        print("Model did not perfectly reproduce the simple periodic pattern.")
+        print(f"Expected : {expected_pattern_part}")
+        print(f"Generated: {generated_sequence}")
+
+def run_quantum_waveform_learning_test():
+    print("\n=== Running Quantum Waveform Learning Test ===\n")
+    # 1. Define Model Configuration for Waveform Prediction
+    seq_len_train = 20
+    n_embd_test = 16 
+    n_head_test = 2
+    n_layer_test = 1
+    n_qubits_test = 4
+    q_depth_test = 1
+    input_dim_test = 1
+    output_dim_test = 1
+
+    config = ModelConfig(
+        n_embd=n_embd_test,
+        n_head=n_head_test,
+        n_layer=n_layer_test,
+        block_size=seq_len_train + 10, # Ensure block_size is appropriate
+        n_intermediate=n_embd_test * 2,
+        layer_norm_epsilon=1e-5,
+        input_dim=input_dim_test,
+        output_dim=output_dim_test,
+        n_qubits=n_qubits_test,
+        q_depth=q_depth_test
+        # Ensure vocab_size is NOT passed
+    )
+    print(f"Quantum Model Config for Waveform Learning Test: {config}\n")
+    
+    try:
+        model = QuantumRWKVModel(config)
+    except Exception as e:
+        print(f"Error instantiating QuantumRWKVModel for waveform: {e}")
+        print("Ensure quantum_rwkv.py's ModelConfig and QuantumRWKVModel are adapted for waveforms.")
+        raise
+    print("QuantumRWKVModel for waveform instantiated successfully.\n")
+
+    # 2. Prepare Waveform Data (Sine wave)
+    total_points = 500
+    time_steps = np.linspace(0, 50, total_points)
+    waveform = np.sin(time_steps).astype(np.float32)
+
+    X_data = torch.from_numpy(waveform[:-1]).unsqueeze(0).unsqueeze(-1) 
+    Y_data = torch.from_numpy(waveform[1:]).unsqueeze(0).unsqueeze(-1)   
+
+    train_split_idx = int(total_points * 0.8)
+    X_train = X_data[:, :train_split_idx, :]
+    Y_train = Y_data[:, :train_split_idx, :]
+    X_test_seed = X_data[:, train_split_idx - seq_len_train : train_split_idx, :]
+    Y_test_true_full = Y_data[:, train_split_idx:, :]
+
+    print(f"X_train shape: {X_train.shape}")
+    print(f"Y_train shape: {Y_train.shape}")
+    print(f"X_test_seed shape: {X_test_seed.shape}")
+    print(f"Y_test_true_full shape: {Y_test_true_full.shape}\n")
+
+    # 3. Training Loop (Sliding Window)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+    criterion = nn.MSELoss() 
+    num_epochs = 500 # Can be adjusted
+    print_every = 50 # Will also be plot_every
+    num_total_train_points = X_train.shape[1]
+
+    all_epoch_losses = [] # To store loss for each epoch
+
+    model.train()
+    print("Starting training for waveform prediction (Quantum - Sliding Windows)...")
+    for epoch in range(num_epochs):
+        epoch_loss = 0.0
+        num_windows_processed = 0
+        for i in range(num_total_train_points - seq_len_train + 1):
+            optimizer.zero_grad()
+            input_window = X_train[:, i : i + seq_len_train, :] 
+            target_window = Y_train[:, i : i + seq_len_train, :] 
+            if input_window.shape[1] != seq_len_train: # Safety check
+                continue
+            initial_states = None # Reset or manage states appropriately for RWKV
+            predictions, _ = model(input_window, states=initial_states)
+            loss = criterion(predictions, target_window)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+            num_windows_processed += 1
+
+        if num_windows_processed > 0:
+            average_epoch_loss = epoch_loss / num_windows_processed
+            all_epoch_losses.append(average_epoch_loss) # Store average loss
+            if (epoch + 1) % print_every == 0:
+                print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {average_epoch_loss:.6f}")
+                
+                # --- Plotting at print_every interval ---
+                model.eval() # Switch to evaluation mode for plotting
+                print(f"Generating plot for epoch {epoch+1}...")
+                
+                current_plot_generated_points = []
+                plot_current_input_sequence = X_test_seed.clone() # Use the original test seed
+                plot_num_points_to_generate = Y_test_true_full.shape[1]
+
+                # Re-initialize generation states for this plotting instance
+                plot_B_gen = plot_current_input_sequence.size(0)
+                plot_device_gen = plot_current_input_sequence.device
+                plot_param_dtype = next(model.parameters()).dtype
+                plot_generation_states = []
+                for _ in range(config.n_layer):
+                    p_initial_wkv_aa = torch.zeros(plot_B_gen, config.n_embd, device=plot_device_gen, dtype=plot_param_dtype)
+                    p_initial_wkv_bb = torch.zeros(plot_B_gen, config.n_embd, device=plot_device_gen, dtype=plot_param_dtype)
+                    p_initial_wkv_pp = torch.full((plot_B_gen, config.n_embd), -1e38, device=plot_device_gen, dtype=plot_param_dtype)
+                    p_wkv_state = (p_initial_wkv_aa, p_initial_wkv_bb, p_initial_wkv_pp)
+                    p_cm_state = torch.zeros(plot_B_gen, config.n_embd, device=plot_device_gen, dtype=plot_param_dtype)
+                    plot_generation_states.append((p_wkv_state, p_cm_state))
+
+                with torch.no_grad():
+                    for _ in range(plot_num_points_to_generate):
+                        plot_pred_out, plot_generation_states = model(plot_current_input_sequence, states=plot_generation_states)
+                        plot_next_pred_point = plot_pred_out[:, -1, :].clone()
+                        current_plot_generated_points.append(plot_next_pred_point.squeeze().item())
+                        plot_current_input_sequence = torch.cat((plot_current_input_sequence[:, 1:, :], plot_next_pred_point.unsqueeze(1)), dim=1)
+                
+                plot_generated_waveform_tensor = torch.tensor(current_plot_generated_points, dtype=torch.float32)
+                # True waveform for plotting remains the same
+                plot_true_waveform_part_for_eval = Y_test_true_full.squeeze().cpu().numpy()
+                plot_generated_waveform_for_eval = plot_generated_waveform_tensor.cpu().numpy()
+
+                # Ensure lengths match for plotting, if generation is shorter/longer for some reason
+                min_len_plot = min(len(plot_generated_waveform_for_eval), len(plot_true_waveform_part_for_eval))
+                plot_generated_waveform_for_eval = plot_generated_waveform_for_eval[:min_len_plot]
+                plot_true_waveform_part_for_eval_adjusted = plot_true_waveform_part_for_eval[:min_len_plot]
+
+                plt.figure(figsize=(14, 7))
+                plot_time_steps_plot_true = np.arange(len(plot_true_waveform_part_for_eval_adjusted))
+                plot_time_steps_plot_gen = np.arange(len(plot_generated_waveform_for_eval))
+                plt.plot(plot_time_steps_plot_true, plot_true_waveform_part_for_eval_adjusted, label='Ground Truth Waveform', color='blue', linestyle='-')
+                plt.plot(plot_time_steps_plot_gen, plot_generated_waveform_for_eval, label=f'Predicted Waveform (Epoch {epoch+1})', color='red', linestyle='--')
+                plt.title(f'Ground Truth vs. Predicted Waveform (Quantum RWKV - Epoch {epoch+1})')
+                plt.xlabel('Time Step (in test segment)')
+                plt.ylabel('Waveform Value')
+                plt.legend()
+                plt.grid(True)
+                plt.tight_layout()
+                
+                # Ensure results_dir exists (it's created later, but good to have it for epoch plots too)
+                results_dir_epoch_plot = "results"
+                os.makedirs(results_dir_epoch_plot, exist_ok=True)
+                plot_filename_epoch = os.path.join(results_dir_epoch_plot, f"waveform_comparison_quantum_epoch_{epoch+1}.png")
+                try:
+                    plt.savefig(plot_filename_epoch)
+                    print(f"Plot saved as {plot_filename_epoch}")
+                    plt.close()
+                except Exception as e:
+                    print(f"Error saving epoch plot: {e}")
+                model.train() # Switch back to training mode
+                # --- End Plotting --- 
+
+        elif (epoch + 1) % print_every == 0: # Handle case where no windows were processed
+             print(f"Epoch [{epoch+1}/{num_epochs}], No windows processed.")
+             all_epoch_losses.append(float('nan')) # Store NaN if no windows
+    print("Training finished.\n")
+
+    # 4. Prediction/Generation and Evaluation (This is the FINAL evaluation)
+    model.eval()
+    print("Starting generation for waveform prediction (Quantum)...")
+
+    generated_waveform_points = []
+    current_input_sequence = X_test_seed.clone()
+    num_points_to_generate = Y_test_true_full.shape[1]
+
+    B_gen = current_input_sequence.size(0)
+    device_gen = current_input_sequence.device
+    param_dtype = next(model.parameters()).dtype # Match model's dtype
+    generation_states = []
+    for _ in range(config.n_layer):
+        initial_wkv_aa = torch.zeros(B_gen, config.n_embd, device=device_gen, dtype=param_dtype)
+        initial_wkv_bb = torch.zeros(B_gen, config.n_embd, device=device_gen, dtype=param_dtype)
+        initial_wkv_pp = torch.full((B_gen, config.n_embd), -1e38, device=device_gen, dtype=param_dtype) # Log space
+        wkv_state = (initial_wkv_aa, initial_wkv_bb, initial_wkv_pp)
+        cm_state = torch.zeros(B_gen, config.n_embd, device=device_gen, dtype=param_dtype) # For channel mixing
+        generation_states.append((wkv_state, cm_state))
+
+    with torch.no_grad():
+        for i in range(num_points_to_generate):
+            pred_out, generation_states = model(current_input_sequence, states=generation_states)
+            next_pred_point = pred_out[:, -1, :].clone() 
+            generated_waveform_points.append(next_pred_point.squeeze().item())
+            current_input_sequence = torch.cat((current_input_sequence[:, 1:, :], next_pred_point.unsqueeze(1)), dim=1)
+
+    generated_waveform_tensor = torch.tensor(generated_waveform_points, dtype=torch.float32)
+    true_waveform_part_for_eval = Y_test_true_full.squeeze().cpu().numpy()
+
+    if len(generated_waveform_tensor) != len(true_waveform_part_for_eval):
+        min_len = min(len(generated_waveform_tensor), len(true_waveform_part_for_eval))
+        true_waveform_part_for_eval = true_waveform_part_for_eval[:min_len]
+        generated_waveform_for_eval = generated_waveform_tensor[:min_len].cpu().numpy()
+    else:
+        generated_waveform_for_eval = generated_waveform_tensor.cpu().numpy()
+
+    mae = mean_absolute_error(true_waveform_part_for_eval, generated_waveform_for_eval)
+    mse = mean_squared_error(true_waveform_part_for_eval, generated_waveform_for_eval)
+
+    print(f"Generated Waveform (Quantum, first 20 points): {generated_waveform_for_eval[:20].tolist()}")
+    print(f"True Waveform (Quantum, first 20 points):      {true_waveform_part_for_eval[:20].tolist()}")
+    print(f"Mean Absolute Error (MAE, Quantum): {mae:.6f}")
+    print(f"Mean Squared Error (MSE, Quantum):  {mse:.6f}\n")
+
+    if mse < 0.1: 
+        print("Quantum model shows some basic learning on waveform prediction.")
+    else:
+        print("Quantum model did not significantly learn the waveform pattern (MSE > 0.1).")
+        
+    results_dir = "results"
+    os.makedirs(results_dir, exist_ok=True) 
+
+    plt.figure(figsize=(14, 7))
+    plot_time_steps_true = np.arange(len(true_waveform_part_for_eval))
+    plot_time_steps_gen = np.arange(len(generated_waveform_for_eval))
+    plt.plot(plot_time_steps_true, true_waveform_part_for_eval, label='Ground Truth Waveform', color='blue', linestyle='-')
+    plt.plot(plot_time_steps_gen, generated_waveform_for_eval, label='Predicted Waveform (Quantum)', color='red', linestyle='--')
+    plt.title('Ground Truth vs. Predicted Waveform (Quantum RWKV)')
+    plt.xlabel('Time Step (in test segment)')
+    plt.ylabel('Waveform Value')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    plot_filename = os.path.join(results_dir, "waveform_comparison_quantum.png") 
+    try:
+        plt.savefig(plot_filename)
+        print(f"Plot saved as {plot_filename}")
+        plt.close() 
+    except Exception as e:
+        print(f"Error saving plot: {e}")
+        
+    csv_filename = os.path.join(results_dir, "model_performance.csv")
+    header = ['Model Type', 'Task', 'MAE', 'MSE']
+    data_row = ['Quantum', 'Waveform', f'{mae:.6f}', f'{mse:.6f}'] 
+    
+    print(f"DEBUG: Attempting to write to CSV: {csv_filename}") 
+    file_exists = os.path.isfile(csv_filename)
+    print(f"DEBUG: File exists check: {file_exists}") 
+    try:
+        print("DEBUG: Opening CSV file...") 
+        is_empty = os.path.getsize(csv_filename) == 0 if file_exists else True 
+        with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile: 
+            print("DEBUG: CSV file opened. Creating writer...") 
+            writer = csv.writer(csvfile)
+            print("DEBUG: CSV writer created.") 
+            if not file_exists or is_empty:
+                print("DEBUG: Writing CSV header...") 
+                writer.writerow(header)
+                print("DEBUG: CSV header written.") 
+            print("DEBUG: Writing CSV data row...") 
+            writer.writerow(data_row)
+            print("DEBUG: CSV data row written.") 
+        print(f"Metrics saved to {csv_filename}")
+    except Exception as e:
+        print(f"ERROR writing to CSV {csv_filename}: {e}")
+        traceback.print_exc() 
+        
+    # --- Save Epoch Losses to CSV ---
+    epoch_loss_csv_filename = os.path.join(results_dir, "epoch_losses_quantum.csv")
+    epoch_loss_header = ["Epoch", "Average Loss"]
+    try:
+        with open(epoch_loss_csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(epoch_loss_header)
+            for epoch_num, loss_val in enumerate(all_epoch_losses):
+                writer.writerow([epoch_num + 1, f"{loss_val:.6f}" if not np.isnan(loss_val) else "NaN"])
+        print(f"Epoch losses saved to {epoch_loss_csv_filename}")
+    except Exception as e:
+        print(f"Error writing epoch losses to CSV {epoch_loss_csv_filename}: {e}")
+        traceback.print_exc()
+
+    print("\n=== Finished Quantum Waveform Learning Test ===\n")
+
+if __name__ == '__main__':
+    run_simple_learning_test()
+    run_quantum_waveform_learning_test() 

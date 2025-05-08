@@ -1,0 +1,6 @@
+Model Type,Task,MAE,MSE
+Classical,Waveform,0.542574,0.502215
+Quantum,Waveform,0.416779,0.277635
+Quantum,Waveform,0.825539,1.201059
+Classical,Waveform,0.597827,0.521746
+Classical,Waveform,1.035118,1.488045
