@@ -1,0 +1,2 @@
+Timestamp,Experiment_ID,Model_Type,Task,n_layer,n_embd,n_head,n_qubits,q_depth,learning_rate,num_epochs_run,seq_len_train,Config_Block_Size,Config_n_intermediate,MAE,MSE
+2025-05-16_20-38-54,c_arma_2025-05-16_20-38-54,Classical,ARMA,1,16,2,N/A,N/A,1.0e-03,1000,20,30,32,2.146787,6.712409

@@ -1,0 +1,2 @@
+Timestamp,Experiment_ID,Model_Type,Task,n_layer,n_embd,n_head,n_qubits,q_depth,learning_rate,num_epochs_run,seq_len_train,Config_Block_Size,Config_n_intermediate,MAE,MSE
+2025-05-16_14-22-01,q_triangle_2025-05-16_14-22-01,Quantum,Triangle,1,16,2,4,1,1.0e-03,1000,20,30,32,0.574583,0.438080
