@@ -62,6 +62,9 @@ def run_classical_chaotic_logistic_prediction():
     all_epoch_losses = []
     model.train()
     print("Starting classical training for chaotic logistic prediction...")
+    training_start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = "results_chaotic_logistic_classical"
+    os.makedirs(results_dir, exist_ok=True)
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         num_windows_processed = 0
@@ -83,6 +86,51 @@ def run_classical_chaotic_logistic_prediction():
             all_epoch_losses.append(average_epoch_loss)
             if (epoch + 1) % print_every == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {average_epoch_loss:.6f}")
+            if (epoch + 1) % 100 == 0:
+                model.eval()
+                generated_waveform_points = []
+                current_input_sequence = X_test_seed.clone().to(device)
+                num_points_to_generate = Y_test_true_full.shape[1]
+                param_dtype = next(model.parameters()).dtype
+                generation_states = []
+                for _ in range(config.n_layer):
+                    initial_wkv_aa = torch.zeros(current_input_sequence.size(0), config.n_embd, device=device, dtype=param_dtype)
+                    initial_wkv_bb = torch.zeros(current_input_sequence.size(0), config.n_embd, device=device, dtype=param_dtype)
+                    initial_wkv_pp = torch.full((current_input_sequence.size(0), config.n_embd), -1e38, device=device, dtype=param_dtype)
+                    wkv_state = (initial_wkv_aa, initial_wkv_bb, initial_wkv_pp)
+                    cm_state = torch.zeros(current_input_sequence.size(0), config.n_embd, device=device, dtype=param_dtype)
+                    generation_states.append((wkv_state, cm_state))
+                with torch.no_grad():
+                    for i in range(num_points_to_generate):
+                        pred_out, generation_states = model(current_input_sequence, states=generation_states)
+                        next_pred_point = pred_out[:, -1, :].clone()
+                        generated_waveform_points.append(next_pred_point.squeeze().item())
+                        current_input_sequence = torch.cat((current_input_sequence[:, 1:, :], next_pred_point.unsqueeze(1)), dim=1)
+                generated_waveform_tensor = torch.tensor(generated_waveform_points, dtype=torch.float32)
+                true_waveform_part_for_eval = Y_test_true_full.squeeze().cpu().numpy()
+                if len(generated_waveform_tensor) != len(true_waveform_part_for_eval):
+                    min_len = min(len(generated_waveform_tensor), len(true_waveform_part_for_eval))
+                    true_waveform_part_for_eval = true_waveform_part_for_eval[:min_len]
+                    generated_waveform_for_eval = generated_waveform_tensor[:min_len].cpu().numpy()
+                else:
+                    generated_waveform_for_eval = generated_waveform_tensor.cpu().numpy()
+                plt.figure(figsize=(14, 7))
+                plt.plot(np.arange(len(true_waveform_part_for_eval)), true_waveform_part_for_eval, label='Ground Truth Chaotic Logistic', color='blue', linestyle='-')
+                plt.plot(np.arange(len(generated_waveform_for_eval)), generated_waveform_for_eval, label='Predicted Chaotic Logistic (Classical)', color='green', linestyle='--')
+                plt.title(f'Ground Truth vs. Predicted Chaotic Logistic (Classical RWKV) - Epoch {epoch+1}')
+                plt.xlabel('Time Step (in test segment)')
+                plt.ylabel('Value')
+                plt.legend()
+                plt.grid(True)
+                plt.tight_layout()
+                plot_filename = os.path.join(results_dir, f"chaotic_logistic_comparison_classical_{training_start_time}_epoch{epoch+1}.png")
+                try:
+                    plt.savefig(plot_filename)
+                    print(f"Plot saved as {plot_filename}")
+                    plt.close()
+                except Exception as e:
+                    print(f"Error saving plot: {e}")
+                model.train()
     print("Classical training finished.\n")
     model.eval()
     print("Starting classical generation for chaotic logistic prediction...")
@@ -118,8 +166,7 @@ def run_classical_chaotic_logistic_prediction():
     print(f"True chaotic logistic (first 20 points):      {true_waveform_part_for_eval[:20].tolist()}")
     print(f"Mean Absolute Error (MAE, classical): {mae:.6f}")
     print(f"Mean Squared Error (MSE, classical):  {mse:.6f}\n")
-    results_dir = "results_chaotic_logistic_classical"
-    os.makedirs(results_dir, exist_ok=True)
+    plot_filename = os.path.join(results_dir, f"chaotic_logistic_comparison_classical_{training_start_time}_final.png")
     plt.figure(figsize=(14, 7))
     plt.plot(np.arange(len(true_waveform_part_for_eval)), true_waveform_part_for_eval, label='Ground Truth Chaotic Logistic', color='blue', linestyle='-')
     plt.plot(np.arange(len(generated_waveform_for_eval)), generated_waveform_for_eval, label='Predicted Chaotic Logistic (Classical)', color='green', linestyle='--')
@@ -129,7 +176,6 @@ def run_classical_chaotic_logistic_prediction():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plot_filename = os.path.join(results_dir, "chaotic_logistic_comparison_classical.png")
     try:
         plt.savefig(plot_filename)
         print(f"Plot saved as {plot_filename}")

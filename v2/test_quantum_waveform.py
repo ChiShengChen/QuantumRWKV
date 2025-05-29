@@ -6,6 +6,10 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 import matplotlib.pyplot as plt # Added for plotting
 from quantum_rwkv import ModelConfig, QuantumRWKVModel # Ensure this imports the modified version
 import os
+import datetime
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device} for quantum waveform prediction test")
 
 def run_waveform_prediction_test():
     # 1. Define Model Configuration for Waveform Prediction
@@ -35,6 +39,7 @@ def run_waveform_prediction_test():
     # Instantiate model
     try:
         model = QuantumRWKVModel(config)
+        model.to(device)  # Move model to device
     except Exception as e:
         print(f"Error instantiating QuantumRWKVModel for waveform: {e}")
         raise
@@ -48,8 +53,8 @@ def run_waveform_prediction_test():
     # Create input sequences and target sequences
     # Input: waveform[t] -> Target: waveform[t+1]
     # We'll feed sequences of length `seq_len_train` and predict the next value for each point in the sequence.
-    X_data = torch.from_numpy(waveform[:-1]).unsqueeze(0).unsqueeze(-1) # (B=1, Total_points-1, 1)
-    Y_data = torch.from_numpy(waveform[1:]).unsqueeze(0).unsqueeze(-1)   # (B=1, Total_points-1, 1)
+    X_data = torch.from_numpy(waveform[:-1]).unsqueeze(0).unsqueeze(-1).to(device) # (B=1, Total_points-1, 1) - Move to device
+    Y_data = torch.from_numpy(waveform[1:]).unsqueeze(0).unsqueeze(-1).to(device)   # (B=1, Total_points-1, 1) - Move to device
 
     # Split into training and test (simple split for now)
     train_split_idx = int(total_points * 0.8)
@@ -73,6 +78,10 @@ def run_waveform_prediction_test():
     model.train()
     print("Starting training for waveform prediction (with sliding windows)...")
     num_total_train_points = X_train.shape[1]
+
+    training_start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = "results_waveform_quantum_simple"
+    os.makedirs(results_dir, exist_ok=True)
 
     for epoch in range(num_epochs):
         epoch_loss = 0.0
@@ -107,6 +116,53 @@ def run_waveform_prediction_test():
             average_epoch_loss = epoch_loss / num_windows_processed
             if (epoch + 1) % print_every == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {average_epoch_loss:.6f}")
+            if (epoch + 1) % 100 == 0:
+                model.eval()
+                generated_waveform_points = []
+                current_input_sequence = X_test_seed.clone().to(device)
+                num_points_to_generate = Y_test_true_full.shape[1]
+                param_dtype = next(model.parameters()).dtype
+                generation_states = []
+                for _ in range(config.n_layer):
+                    initial_wkv_aa = torch.zeros(current_input_sequence.size(0), config.n_embd, device=device, dtype=param_dtype)
+                    initial_wkv_bb = torch.zeros(current_input_sequence.size(0), config.n_embd, device=device, dtype=param_dtype)
+                    initial_wkv_pp = torch.full((current_input_sequence.size(0), config.n_embd), -1e38, device=device, dtype=param_dtype)
+                    wkv_state = (initial_wkv_aa, initial_wkv_bb, initial_wkv_pp)
+                    cm_state = torch.zeros(current_input_sequence.size(0), config.n_embd, device=device, dtype=param_dtype)
+                    generation_states.append((wkv_state, cm_state))
+                with torch.no_grad():
+                    for i in range(num_points_to_generate):
+                        pred_out, generation_states = model(current_input_sequence, states=generation_states)
+                        next_pred_point = pred_out[:, -1, :].clone()
+                        generated_waveform_points.append(next_pred_point.squeeze().item())
+                        current_input_sequence = torch.cat((current_input_sequence[:, 1:, :], next_pred_point.unsqueeze(1)), dim=1)
+                generated_waveform_tensor = torch.tensor(generated_waveform_points, dtype=torch.float32)
+                true_waveform_part_for_eval = Y_test_true_full.squeeze().cpu().numpy()
+                if len(generated_waveform_tensor) != len(true_waveform_part_for_eval):
+                    min_len = min(len(generated_waveform_tensor), len(true_waveform_part_for_eval))
+                    true_waveform_part_for_eval = true_waveform_part_for_eval[:min_len]
+                    generated_waveform_for_eval = generated_waveform_tensor[:min_len].cpu().numpy()
+                else:
+                    generated_waveform_for_eval = generated_waveform_tensor.cpu().numpy()
+                plt.figure(figsize=(14, 7))
+                plot_time_steps_true = np.arange(len(true_waveform_part_for_eval))
+                plot_time_steps_gen = np.arange(len(generated_waveform_for_eval))
+                plt.plot(plot_time_steps_true, true_waveform_part_for_eval, label='Ground Truth Waveform', color='blue', linestyle='-')
+                plt.plot(plot_time_steps_gen, generated_waveform_for_eval, label='Predicted Waveform (Quantum)', color='red', linestyle='--')
+                plt.title(f'Ground Truth vs. Predicted Waveform (Quantum RWKV) - Epoch {epoch+1}')
+                plt.xlabel('Time Step (in test segment)')
+                plt.ylabel('Waveform Value')
+                plt.legend()
+                plt.grid(True)
+                plt.tight_layout()
+                plot_filename = os.path.join(results_dir, f"waveform_prediction_comparison_quantum_rwkv_{training_start_time}_epoch{epoch+1}.png")
+                try:
+                    plt.savefig(plot_filename)
+                    print(f"Plot saved as {plot_filename}")
+                    plt.close()
+                except Exception as e:
+                    print(f"Error saving or showing plot: {e}")
+                model.train()
         elif (epoch + 1) % print_every == 0:
             print(f"Epoch [{epoch+1}/{num_epochs}], No windows processed in this epoch.")
 
@@ -117,12 +173,12 @@ def run_waveform_prediction_test():
     print("Starting generation for waveform prediction...")
     
     generated_waveform_points = []
-    current_input_sequence = X_test_seed.clone() # (1, seq_len_train, 1)
+    current_input_sequence = X_test_seed.clone().to(device) # (1, seq_len_train, 1) - Ensure on device
     num_points_to_generate = Y_test_true_full.shape[1]
 
     # Initialize generation states
     B_gen = current_input_sequence.size(0)
-    device_gen = current_input_sequence.device
+    device_gen = device # Use global device
     param_dtype = next(model.parameters()).dtype
     generation_states = []
     for _ in range(config.n_layer):
@@ -191,9 +247,7 @@ def run_waveform_prediction_test():
     plt.tight_layout()
     
     # Save or show the plot
-    results_dir = "results_waveform_quantum_simple"
-    os.makedirs(results_dir, exist_ok=True)
-    plot_filename = os.path.join(results_dir, "waveform_prediction_comparison_quantum_rwkv.png")
+    plot_filename = os.path.join(results_dir, f"waveform_prediction_comparison_quantum_rwkv_{training_start_time}_final.png")
     try:
         plt.savefig(plot_filename)
         print(f"Plot saved as {plot_filename}")

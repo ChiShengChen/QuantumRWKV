@@ -183,6 +183,7 @@ def run_classical_waveform_prediction_test():
 
     model.train()
     print("Starting classical training for waveform prediction (with sliding windows)...")
+    training_start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         num_windows_processed = 0
@@ -203,20 +204,12 @@ def run_classical_waveform_prediction_test():
         if num_windows_processed > 0:
             average_epoch_loss = epoch_loss / num_windows_processed
             all_epoch_losses.append(average_epoch_loss) # Store average loss
-            if (epoch + 1) % print_every == 0:
-                print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {average_epoch_loss:.6f}")
-
-                # --- Plotting at print_every interval (Classical) ---
-                model.eval() # Switch to evaluation mode for plotting
-                print(f"Generating plot for classical model epoch {epoch+1}...")
-                
+            if (epoch + 1) % 100 == 0:
+                # 存圖
+                model.eval()
                 current_plot_generated_points_classical = []
-                # Ensure X_test_seed is on the correct device for plotting
-                plot_current_input_sequence_classical = X_test_seed.clone().to(device) 
+                plot_current_input_sequence_classical = X_test_seed.clone().to(device)
                 plot_num_points_to_generate_classical = Y_test_true_full.shape[1]
-
-                # plot_B_gen_classical = plot_current_input_sequence_classical.size(0)
-                # plot_device_gen_classical = plot_current_input_sequence_classical.device # Correctly derived
                 plot_param_dtype_classical = next(model.parameters()).dtype
                 plot_generation_states_classical = []
                 for _ in range(config.n_layer):
@@ -226,22 +219,18 @@ def run_classical_waveform_prediction_test():
                     p_wkv_state_cl = (p_initial_wkv_aa_cl, p_initial_wkv_bb_cl, p_initial_wkv_pp_cl)
                     p_cm_state_cl = torch.zeros(plot_current_input_sequence_classical.size(0), config.n_embd, device=device, dtype=plot_param_dtype_classical)
                     plot_generation_states_classical.append((p_wkv_state_cl, p_cm_state_cl))
-
                 with torch.no_grad():
                     for _ in range(plot_num_points_to_generate_classical):
                         plot_pred_out_cl, plot_generation_states_classical = model(plot_current_input_sequence_classical, states=plot_generation_states_classical)
                         plot_next_pred_point_cl = plot_pred_out_cl[:, -1, :].clone()
                         current_plot_generated_points_classical.append(plot_next_pred_point_cl.squeeze().item())
                         plot_current_input_sequence_classical = torch.cat((plot_current_input_sequence_classical[:, 1:, :], plot_next_pred_point_cl.unsqueeze(1)), dim=1)
-                
                 plot_generated_waveform_tensor_cl = torch.tensor(current_plot_generated_points_classical, dtype=torch.float32)
-                plot_true_waveform_part_for_eval_cl = Y_test_true_full.squeeze().cpu().numpy() # Remains same
+                plot_true_waveform_part_for_eval_cl = Y_test_true_full.squeeze().cpu().numpy()
                 plot_generated_waveform_for_eval_cl = plot_generated_waveform_tensor_cl.cpu().numpy()
-
                 min_len_plot_cl = min(len(plot_generated_waveform_for_eval_cl), len(plot_true_waveform_part_for_eval_cl))
                 plot_generated_waveform_for_eval_cl = plot_generated_waveform_for_eval_cl[:min_len_plot_cl]
                 plot_true_waveform_part_for_eval_cl_adj = plot_true_waveform_part_for_eval_cl[:min_len_plot_cl]
-
                 plt.figure(figsize=(14, 7))
                 plt.plot(np.arange(len(plot_true_waveform_part_for_eval_cl_adj)), plot_true_waveform_part_for_eval_cl_adj, label='Ground Truth Waveform', color='blue', linestyle='-')
                 plt.plot(np.arange(len(plot_generated_waveform_for_eval_cl)), plot_generated_waveform_for_eval_cl, label=f'Predicted Waveform (Classical Epoch {epoch+1})', color='green', linestyle='--')
@@ -251,19 +240,16 @@ def run_classical_waveform_prediction_test():
                 plt.legend()
                 plt.grid(True)
                 plt.tight_layout()
-                
                 results_dir_epoch_plot_cl = "results"
                 os.makedirs(results_dir_epoch_plot_cl, exist_ok=True)
-                plot_filename_epoch_cl = os.path.join(results_dir_epoch_plot_cl, f"waveform_comparison_classical_epoch_{epoch+1}.png")
+                plot_filename_epoch_cl = os.path.join(results_dir_epoch_plot_cl, f"waveform_comparison_classical_{training_start_time}_epoch{epoch+1}.png")
                 try:
                     plt.savefig(plot_filename_epoch_cl)
                     print(f"Plot saved as {plot_filename_epoch_cl}")
                     plt.close()
                 except Exception as e:
                     print(f"Error saving classical epoch plot: {e}")
-                model.train() # Switch back to training mode
-                # --- End Plotting (Classical) ---
-
+                model.train()
         elif (epoch + 1) % print_every == 0:
              print(f"Epoch [{epoch+1}/{num_epochs}], No windows processed in this epoch.")
              all_epoch_losses.append(float('nan')) # Store NaN if no windows
@@ -335,7 +321,7 @@ def run_classical_waveform_prediction_test():
     plt.grid(True)
     plt.tight_layout()
     
-    plot_filename = os.path.join(results_dir, "waveform_comparison_classical.png") # Save in results dir
+    plot_filename = os.path.join(results_dir, f"waveform_comparison_classical_{training_start_time}_final.png")
     try:
         plt.savefig(plot_filename)
         print(f"Plot saved as {plot_filename}")
