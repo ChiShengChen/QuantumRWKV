@@ -7,7 +7,7 @@ This project explores and implements a Quantum-enhanced Recurrent Weighted Key V
 The repository is organized as follows:
 
 ```
-Quantum_rwkv/
+Quantum_rwkv/v2
 ├── rwkv.py                             # Classical RWKV model implementation
 ├── quantum_rwkv.py                     # Quantum-enhanced RWKV model implementation
 ├── test_rwkv.py                        # Unit tests for the RWKV model components
@@ -19,13 +19,8 @@ Quantum_rwkv/
 │
 ├── results/                            # General results directory (may contain summaries or plots)
 ├── results_<dataset>_classical/        # Results for classical model on <dataset> (e.g., plots, metrics)
-├── results_<dataset>_quantum/          # Results for quantum model on <dataset> (e.g., plots, metrics)
-│
-├── comparison_summary.csv              # CSV file summarizing comparison results across datasets
-├── quantum_circuit.png                 # Visualization of the quantum circuit used
-├── quantum_circuit_high_level.png      # High-level visualization of the quantum circuit
-├── *.png                               # Other result plots and visualizations
-└── README.md                           # This file
+└── results_<dataset>_quantum/          # Results for quantum model on <dataset> (e.g., plots, metrics)
+
 ```
 
 ## Key Components
