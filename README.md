@@ -1,6 +1,12 @@
-# Quantum RWKV Project
+# Quantum RWKV 
 
-This project explores and implements a Quantum-enhanced Recurrent Weighted Key Value (RWKV) model for time series prediction tasks. It provides both classical and quantum versions of the RWKV model and compares their performance on various time series datasets.
+[![arXiv](https://img.shields.io/badge/arXiv-2505.13524-b31b1b.svg?style=flat-square)](https://arxiv.org/abs/2505.13524)  
+The official implement of paper "[Quantum-Enhanced Channel Mixing in RWKV Models for Time Series Forecasting](https://arxiv.org/abs/2505.13524)." 
+This project explores and implements a Quantum-enhanced Recurrent Weighted Key Value (RWKV) model for time series prediction tasks. It provides both classical and quantum versions of the RWKV model and compares their performance on various time series datasets.  
+
+![image](https://github.com/user-attachments/assets/b9b9ea43-88c6-458f-8ccc-5f820d1c59af)
+
+
 
 ## Project Structure
 
@@ -71,10 +77,12 @@ The project includes visualizations such as:
 *   `quantum_circuit_high_level.png`: A simplified, high-level diagram of the quantum circuit.
 *   Various `*.png` files in the root directory and `results_*` directories, showcasing prediction comparisons (e.g., `waveform_prediction_comparison_quantum_rwkv.png`).
 
-## Contributing
-
-(Optional: Add guidelines for contributing to the project.)
-
-## License
-
-(Optional: Specify the license for the project.) 
+## Citation  
+```bash
+@article{chen2025quantum,
+  title={Quantum-Enhanced Channel Mixing in RWKV Models for Time Series Forecasting},
+  author={Chen, Chi-Sheng and Kuo, En-Jui},
+  journal={arXiv preprint arXiv:2505.13524},
+  year={2025}
+}
+```
