@@ -1,2 +1,6 @@
 Timestamp,Experiment_ID,Model_Type,Task,n_layer,n_embd,n_head,n_qubits,q_depth,learning_rate,num_epochs_run,seq_len_train,Config_Block_Size,Config_n_intermediate,MAE,MSE
 2025-05-15_21-58-12,q_damped_2025-05-15_21-58-12,Quantum,DampedOscillation,1,16,2,4,1,1.0e-03,1000,20,30,32,0.633449,0.474224
+2025-05-23_04-36-16,q_damped_2025-05-23_04-36-16,Quantum,DampedOscillation,1,16,2,4,1,1.0e-03,1000,20,30,32,0.504959,0.347393
+2025-05-23_05-26-55,q_damped_2025-05-23_05-26-55,Quantum,DampedOscillation,1,16,2,4,1,1.0e-03,1000,20,30,32,0.464160,0.269078
+2025-05-23_05-27-03,q_damped_2025-05-23_05-27-03,Quantum,DampedOscillation,1,16,2,4,1,1.0e-03,1000,20,30,32,0.324035,0.153344
+2025-05-23_05-32-27,q_damped_2025-05-23_05-32-27,Quantum,DampedOscillation,1,16,2,4,1,1.0e-03,1000,20,30,32,0.684236,0.530109
