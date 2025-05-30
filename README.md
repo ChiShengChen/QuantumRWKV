@@ -10,7 +10,7 @@ This project explores and implements a Quantum-enhanced Recurrent Weighted Key V
 
 ## Project Structure
 
-The repository is organized as follows:
+The repository is organized as follows, v1 is experimental version, v2 is the version in paper:
 
 ```
 Quantum_rwkv/v2
