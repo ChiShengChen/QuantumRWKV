@@ -6,6 +6,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 import matplotlib.pyplot as plt # Added for plotting
 from quantum_rwkv import ModelConfig, QuantumRWKVModel # Ensure this imports the modified version
 import os
+import csv # Added for CSV logging
 import datetime
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -71,16 +72,17 @@ def run_waveform_prediction_test():
     # 3. Training Loop
     optimizer = optim.AdamW(model.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
-    num_epochs = 100 # Adjust as needed
+    num_epochs = 1000 # Adjust as needed
     print_every = 10
     batch_size_train = 1 # Using the whole sequence as one batch for simplicity
+    all_epoch_losses = [] # Added to store epoch losses
 
     model.train()
     print("Starting training for waveform prediction (with sliding windows)...")
     num_total_train_points = X_train.shape[1]
 
     training_start_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = "results_waveform_quantum_simple"
+    results_dir = "results_waveform_quantum" # Changed directory name
     os.makedirs(results_dir, exist_ok=True)
 
     for epoch in range(num_epochs):
@@ -114,6 +116,7 @@ def run_waveform_prediction_test():
         
         if num_windows_processed > 0:
             average_epoch_loss = epoch_loss / num_windows_processed
+            all_epoch_losses.append(average_epoch_loss) # Store average epoch loss
             if (epoch + 1) % print_every == 0:
                 print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {average_epoch_loss:.6f}")
             if (epoch + 1) % 100 == 0:
@@ -155,7 +158,7 @@ def run_waveform_prediction_test():
                 plt.legend()
                 plt.grid(True)
                 plt.tight_layout()
-                plot_filename = os.path.join(results_dir, f"waveform_prediction_comparison_quantum_rwkv_{training_start_time}_epoch{epoch+1}.png")
+                plot_filename = os.path.join(results_dir, f"waveform_comparison_quantum_{training_start_time}_epoch{epoch+1}.png") # Changed plot filename
                 try:
                     plt.savefig(plot_filename)
                     print(f"Plot saved as {plot_filename}")
@@ -226,6 +229,54 @@ def run_waveform_prediction_test():
     print(f"Mean Absolute Error (MAE): {mae:.6f}")
     print(f"Mean Squared Error (MSE):  {mse:.6f}\n")
 
+    # Save detailed metrics to CSV
+    csv_filename = os.path.join(results_dir, "model_performance.csv")
+    header = [
+        'Timestamp', 'Experiment_ID', 'Model_Type', 'Task', 
+        'n_layer', 'n_embd', 'n_head', 'n_qubits', 'q_depth', 
+        'learning_rate', 'num_epochs_run', 'seq_len_train',
+        'Config_Block_Size', 'Config_n_intermediate', 
+        'MAE', 'MSE'
+    ]
+    timestamp_csv = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") # Use a new timestamp for CSV if needed, or training_start_time
+    experiment_id = f"q_waveform_{timestamp_csv}" # Consistent experiment ID
+    learning_rate = optimizer.param_groups[0]['lr'] # Get learning rate
+
+    data_row = [
+        timestamp_csv, experiment_id, 'Quantum', 'Waveform', # Task name
+        config.n_layer, config.n_embd, config.n_head, config.n_qubits, config.q_depth,
+        f'{learning_rate:.1e}', num_epochs, seq_len_train, # Use actual num_epochs run
+        config.block_size, config.n_intermediate,
+        f'{mae:.6f}', f'{mse:.6f}'
+    ]
+    
+    file_exists = os.path.isfile(csv_filename)
+    # Check if file exists and is empty to write header
+    is_empty = os.path.getsize(csv_filename) == 0 if file_exists else True
+
+    try:
+        with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            if not file_exists or is_empty: # Write header if new file or empty file
+                writer.writerow(header)
+            writer.writerow(data_row)
+        print(f"Detailed metrics saved to {csv_filename}")
+    except Exception as e:
+        print(f"Error writing detailed metrics to CSV {csv_filename}: {e}")
+
+    # Save epoch losses to CSV
+    epoch_loss_csv_filename = os.path.join(results_dir, "epoch_losses_quantum.csv")
+    epoch_loss_header = ["Epoch", "Average Loss"]
+    try:
+        with open(epoch_loss_csv_filename, 'w', newline='', encoding='utf-8') as csvfile: # 'w' to overwrite or create new
+            writer = csv.writer(csvfile)
+            writer.writerow(epoch_loss_header)
+            for epoch_num, loss_val in enumerate(all_epoch_losses):
+                writer.writerow([epoch_num + 1, f"{loss_val:.6f}" if not np.isnan(loss_val) else "NaN"])
+        print(f"Epoch losses saved to {epoch_loss_csv_filename}")
+    except Exception as e:
+        print(f"Error writing epoch losses to CSV {epoch_loss_csv_filename}: {e}")
+
     if mse < 0.1: # Arbitrary threshold for basic learning
         print("Model shows some basic learning on waveform prediction.")
     else:
@@ -247,7 +298,7 @@ def run_waveform_prediction_test():
     plt.tight_layout()
     
     # Save or show the plot
-    plot_filename = os.path.join(results_dir, f"waveform_prediction_comparison_quantum_rwkv_{training_start_time}_final.png")
+    plot_filename = os.path.join(results_dir, f"waveform_comparison_quantum_{training_start_time}_final.png") # Changed plot filename
     try:
         plt.savefig(plot_filename)
         print(f"Plot saved as {plot_filename}")
